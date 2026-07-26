@@ -4,7 +4,7 @@ description: >-
   Converts PNG/JPG images to WebP via the bundled Node.js sharp script.
   Use when the user asks to convert images to WebP, optimize PNG/JPG assets,
   replace .png/.jpg with .webp, or run png-to-webp / convert-to-webp.
-disable-model-invocation: true
+disable-model-invocation: false
 ---
 
 # PNG → WebP
