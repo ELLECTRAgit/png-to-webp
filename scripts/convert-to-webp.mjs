@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 
+import { execFile, exec } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import fs from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
-import { createRequire } from 'node:module'
-import { fileURLToPath } from 'node:url'
+import { promisify } from 'node:util'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const skillRoot = path.resolve(__dirname, '..')
-const require = createRequire(import.meta.url)
+const execFileAsync = promisify(execFile)
+const execAsync = promisify(exec)
 
-const pkg = require(path.join(skillRoot, 'package.json'))
-const VERSION = pkg.version || '0.0.0'
+const VERSION = '2.1.1'
 
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg'])
 const DEFAULT_QUALITIES = [90, 80, 75]
@@ -38,28 +38,81 @@ const TEXT_EXTS = new Set([
   '.css',
   '.scss',
   '.html',
-  '.svg',
   '.yml',
   '.yaml',
 ])
 
-async function loadSharp() {
+const CWEBP_INSTALL_HINT = `Установите libwebp — в PATH должна появиться утилита cwebp:
+
+  Windows:  choco install libwebp   или   scoop install webp
+  macOS:    brew install webp
+  Linux:    sudo apt install webp   /   sudo dnf install libwebp-tools
+
+Скачать: https://developers.google.com/speed/webp/download
+
+После установки:
+  1. Закройте и откройте терминал (или Cursor) заново
+  2. Проверьте: cwebp -version
+  3. Или: node scripts/convert-to-webp.mjs --check`
+
+function printCwebpMissingError() {
+  console.error('Не найден cwebp (libwebp) в PATH.\n')
+  console.error(CWEBP_INSTALL_HINT)
+}
+
+async function findCwebpInPath() {
   try {
-    return require(path.join(skillRoot, 'node_modules', 'sharp'))
+    if (process.platform === 'win32') {
+      const { stdout } = await execAsync('where cwebp', {
+        shell: true,
+        windowsHide: true,
+      })
+      const line = stdout.trim().split(/\r?\n/).find((l) => l.trim())
+      return line?.trim() || null
+    }
+    const { stdout } = await execAsync('command -v cwebp 2>/dev/null || which cwebp', {
+      shell: true,
+    })
+    return stdout.trim() || null
   } catch {
-    console.error(
-      'Не найден sharp. Из корня репозитория выполни: pnpm install\n' +
-        `Папка: ${skillRoot}`
-    )
-    process.exit(1)
+    return null
   }
 }
 
+async function resolveCwebp() {
+  const pathHit = await findCwebpInPath()
+  const candidates = []
+  if (pathHit) candidates.push(pathHit)
+  if (process.platform === 'win32') {
+    candidates.push('cwebp.exe', 'cwebp')
+  } else {
+    candidates.push('cwebp')
+  }
+
+  const tried = new Set()
+  for (const cmd of candidates) {
+    if (!cmd || tried.has(cmd)) continue
+    tried.add(cmd)
+    try {
+      const { stdout, stderr } = await execFileAsync(cmd, ['-version'])
+      const versionLine = `${stdout || stderr}`.trim().split(/\r?\n/)[0]
+      return { cmd, resolvedPath: pathHit || cmd, version: versionLine }
+    } catch {
+      // try next
+    }
+  }
+
+  printCwebpMissingError()
+  process.exit(1)
+}
+
 function printHelp() {
-  console.log(`convert-to-webp v${VERSION} — PNG/JPG → WebP
+  console.log(`convert-to-webp v${VERSION} — PNG/JPG → WebP (через cwebp)
 
 Использование:
   node scripts/convert-to-webp.mjs <путь...> [опции]
+
+Требуется: cwebp (libwebp) в PATH, Node.js 18+
 
 Аргументы:
   <путь...>              файл(ы) или папка(и) с .png/.jpg/.jpeg
@@ -73,17 +126,16 @@ function printHelp() {
   --require-ref-update   с --delete-originals: не удалять, если --replace-in
                          не нашёл ссылок на этот файл в коде
   --replace-in <dir>     заменить пути в текстовых файлах под dir
-  --also-replace-basename  дополнительно заменять только имя файла (осторожно)
   --exclude <list>       пропускать папки при обходе (через запятую)
   --json                 вывести отчёт в JSON (в stdout)
   --report <file>        сохранить отчёт в JSON-файл
+  --check                проверить cwebp в PATH и выйти
   --dry-run              только показать план, ничего не писать/не удалять
   --help                 эта справка
 
 Примеры:
   node scripts/convert-to-webp.mjs public/images/hero.png --dry-run
   node scripts/convert-to-webp.mjs public/images --delete-originals --replace-in src
-  node scripts/convert-to-webp.mjs public/images --replace-in src --report report.json
 `)
 }
 
@@ -106,7 +158,6 @@ function parseArgs(argv) {
     deleteOriginals: false,
     requireRefUpdate: false,
     replaceIn: null,
-    alsoReplaceBasename: false,
     excludes: new Set(DEFAULT_EXCLUDES),
     dryRun: false,
     json: false,
@@ -141,10 +192,6 @@ function parseArgs(argv) {
     }
     if (arg === '--no-lossless') {
       opts.tryLossless = false
-      continue
-    }
-    if (arg === '--also-replace-basename') {
-      opts.alsoReplaceBasename = true
       continue
     }
     if (arg === '--quality') {
@@ -238,15 +285,28 @@ function formatBytes(n) {
   return `${(n / (1024 * 1024)).toFixed(2)} MB`
 }
 
-async function encodeWebp(sharp, inputPath, { lossless, quality }) {
-  const pipeline = sharp(inputPath, { failOn: 'none' })
-  if (lossless) {
-    return pipeline.webp({ lossless: true }).toBuffer()
-  }
-  return pipeline.webp({ quality, effort: 4 }).toBuffer()
+function tempWebpPath() {
+  return path.join(os.tmpdir(), `png-to-webp-${randomBytes(8).toString('hex')}.webp`)
 }
 
-async function convertOne(sharp, inputPath, opts) {
+async function runCwebp(cwebpCmd, inputPath, outputPath, { lossless, quality }) {
+  const args = lossless
+    ? ['-lossless', inputPath, '-o', outputPath]
+    : ['-q', String(quality), inputPath, '-o', outputPath]
+  await execFileAsync(cwebpCmd, args)
+  const stat = await fs.stat(outputPath)
+  return stat.size
+}
+
+async function safeUnlink(filePath) {
+  try {
+    await fs.unlink(filePath)
+  } catch {
+    // ignore
+  }
+}
+
+async function convertOne(cwebpCmd, inputPath, opts) {
   const outPath = inputPath.replace(/\.(png|jpe?g)$/i, '.webp')
   const srcStat = await fs.stat(inputPath)
   const srcSize = srcStat.size
@@ -261,18 +321,33 @@ async function convertOne(sharp, inputPath, opts) {
 
   let best = null
   const tryLog = []
+  const tempFiles = []
 
-  for (const attempt of attempts) {
-    const buffer = await encodeWebp(sharp, inputPath, attempt)
-    const size = buffer.length
-    const smaller = size < srcSize
-    tryLog.push({ label: attempt.label, size, smaller })
+  try {
+    for (const attempt of attempts) {
+      const tmpOut = tempWebpPath()
+      tempFiles.push(tmpOut)
 
-    if (!best || size < best.size) {
-      best = { ...attempt, buffer, size }
+      try {
+        const size = await runCwebp(cwebpCmd, inputPath, tmpOut, attempt)
+        const smaller = size < srcSize
+        tryLog.push({ label: attempt.label, size, smaller })
+
+        if (!best || size < best.size) {
+          best = { ...attempt, size, tempPath: tmpOut }
+        }
+
+        if (smaller) break
+      } catch (err) {
+        await safeUnlink(tmpOut)
+        throw new Error(`cwebp (${attempt.label}): ${err.message || err}`)
+      }
     }
-
-    if (smaller) break
+  } finally {
+    for (const tmp of tempFiles) {
+      if (best?.tempPath === tmp) continue
+      await safeUnlink(tmp)
+    }
   }
 
   const improved = best.size < srcSize
@@ -315,7 +390,7 @@ function addPathVariants(relPath, relPathOut, add) {
   add(urlPath.replace(/\//g, '\\'), urlPathOut.replace(/\//g, '\\'))
 }
 
-function buildReplacementPatterns(inputPath, outPath, replaceRoot, cwd, alsoBasename) {
+function buildReplacementPatterns(inputPath, outPath, replaceRoot, cwd) {
   const patterns = []
   const seen = new Set()
 
@@ -333,19 +408,6 @@ function buildReplacementPatterns(inputPath, outPath, replaceRoot, cwd, alsoBase
     const relRoot = toPosix(path.relative(replaceRoot, inputPath))
     const relRootOut = toPosix(path.relative(replaceRoot, outPath))
     addPathVariants(relRoot, relRootOut, add)
-  }
-
-  const fromExt = path.extname(inputPath)
-  const base = path.basename(inputPath, fromExt)
-  const altExts =
-    fromExt.toLowerCase() === '.jpeg'
-      ? [`.jpeg`, `.jpg`, `.JPEG`, `.JPG`]
-      : [fromExt, fromExt.toUpperCase()]
-
-  for (const ext of altExts) {
-    const fromName = `${base}${ext}`
-    const toName = path.basename(outPath)
-    if (alsoBasename) add(fromName, toName)
   }
 
   return patterns
@@ -383,13 +445,7 @@ async function replaceRefs(replaceRoot, conversions, opts, cwd) {
 
   const perFile = conversions.map((conv) => ({
     inputPath: conv.inputPath,
-    patterns: buildReplacementPatterns(
-      conv.inputPath,
-      conv.outPath,
-      replaceRoot,
-      cwd,
-      opts.alsoReplaceBasename
-    ),
+    patterns: buildReplacementPatterns(conv.inputPath, conv.outPath, replaceRoot, cwd),
     hitCount: 0,
   }))
 
@@ -435,12 +491,14 @@ function logErr(...args) {
   console.error(...args)
 }
 
-function buildReport(results, changedCodeFiles, opts) {
+function buildReport(results, changedCodeFiles, opts, cwebpCmd) {
   const converted = results.filter((r) => r.shouldWrite)
   const skipped = results.filter((r) => !r.shouldWrite)
 
   return {
     version: VERSION,
+    encoder: 'cwebp',
+    cwebp: cwebpCmd,
     dryRun: opts.dryRun,
     summary: {
       total: results.length,
@@ -455,7 +513,6 @@ function buildReport(results, changedCodeFiles, opts) {
       deleteOriginals: opts.deleteOriginals,
       requireRefUpdate: opts.requireRefUpdate,
       replaceIn: opts.replaceIn,
-      alsoReplaceBasename: opts.alsoReplaceBasename,
       excludes: [...opts.excludes],
     },
     files: results.map((r) => ({
@@ -481,9 +538,24 @@ function buildReport(results, changedCodeFiles, opts) {
 }
 
 async function main() {
-  const sharp = await loadSharp()
+  const argv = process.argv.slice(2)
+  if (argv.some((a) => a === '--help' || a === '-h')) {
+    printHelp()
+    process.exit(0)
+  }
+
+  if (argv.some((a) => a === '--check')) {
+    const cwebp = await resolveCwebp()
+    console.log(`OK: cwebp в PATH`)
+    console.log(`  путь: ${cwebp.resolvedPath}`)
+    if (cwebp.version) console.log(`  ${cwebp.version}`)
+    process.exit(0)
+  }
+
+  const cwebpInfo = await resolveCwebp()
+  const cwebpCmd = cwebpInfo.cmd
   const cwd = process.cwd()
-  const { targets, opts } = parseArgs(process.argv.slice(2))
+  const { targets, opts } = parseArgs(argv)
   const images = await collectImages(targets, opts.excludes)
 
   if (images.length === 0) {
@@ -492,7 +564,7 @@ async function main() {
   }
 
   if (!opts.json) {
-    log(`convert-to-webp v${VERSION}`)
+    log(`convert-to-webp v${VERSION} (cwebp)`)
     log(`Найдено изображений: ${images.length}`)
     if (opts.dryRun) log('Режим: dry-run (без записи)')
     log(`Качества: ${opts.qualities.join(', ')}${opts.tryLossless ? ' + lossless' : ''}`)
@@ -500,7 +572,7 @@ async function main() {
 
   const results = []
   for (const inputPath of images) {
-    const result = await convertOne(sharp, inputPath, opts)
+    const result = await convertOne(cwebpCmd, inputPath, opts)
     results.push(result)
 
     if (!opts.json) {
@@ -517,6 +589,7 @@ async function main() {
         )
         log(`      попытки: ${tries}`)
         log(`      WebP больше исходника — не пишем (добавь --keep-if-larger чтобы сохранить)`)
+        if (result.best.tempPath) await safeUnlink(result.best.tempPath)
         continue
       }
 
@@ -529,7 +602,10 @@ async function main() {
     }
 
     if (!opts.dryRun && result.shouldWrite) {
-      await fs.writeFile(result.outPath, result.best.buffer)
+      await fs.copyFile(result.best.tempPath, result.outPath)
+    }
+    if (result.best.tempPath) {
+      await safeUnlink(result.best.tempPath)
     }
   }
 
@@ -586,11 +662,9 @@ async function main() {
     }
   }
 
-  const report = buildReport(results, changedCodeFiles, opts)
+  const report = buildReport(results, changedCodeFiles, opts, cwebpInfo.resolvedPath)
 
-  if (opts.reportPath && !opts.dryRun) {
-    await fs.writeFile(opts.reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8')
-  } else if (opts.reportPath && opts.dryRun) {
+  if (opts.reportPath) {
     await fs.writeFile(opts.reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8')
   }
 
