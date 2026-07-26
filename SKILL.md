@@ -75,7 +75,7 @@ node "<skill-root>/scripts/convert-to-webp.mjs" public/images --json
 1. Lossy **q90** → **q80** → **q75**, если WebP больше исходника.
 2. Потом **lossless** (палитровые PNG).
 3. По умолчанию не пишет WebP, если лучший вариант тяжелее исходника (`--keep-if-larger` — переопределить).
-4. `--replace-in` меняет **относительные пути** в коде, не только имя файла.
+4. `--replace-in` меняет **относительные пути** в коде, в т.ч. Next.js-стиль `/images/...` (без `public/`).
 5. `--also-replace-basename` — доп. замена по имени (осторожно).
 6. `--require-ref-update` + `--delete-originals`: не удалять исходник, если ссылки в `--replace-in` не найдены.
 7. По умолчанию пропускает `node_modules`, `.git`, `dist`, `.next` при обходе (`--exclude` для своих папок).
