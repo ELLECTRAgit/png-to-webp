@@ -122,9 +122,10 @@ node ~/.cursor/skills/png-to-webp/scripts/convert-to-webp.mjs public/images --re
 
 ## Замена путей в коде
 
-По умолчанию ищет **относительные пути** от текущей папки и от `--replace-in`:
+По умолчанию ищет **относительные пути** от корня проекта и от `--replace-in`:
 
 - `public/images/hero.png` → `public/images/hero.webp`
+- `/images/hero.png` → `/images/hero.webp` (Next.js: файлы из `public/` без префикса `public/`)
 - `./public/images/hero.png` → `./public/images/hero.webp`
 - варианты с `\` для Windows
 
