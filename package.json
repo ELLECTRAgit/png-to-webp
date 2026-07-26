@@ -1,0 +1,16 @@
+{
+  "name": "png-to-webp-skill",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Cursor skill и скрипт: конвертация PNG/JPG в WebP",
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "convert-to-webp": "./scripts/convert-to-webp.mjs"
+  },
+  "dependencies": {
+    "sharp": "^0.34.5"
+  }
+}
