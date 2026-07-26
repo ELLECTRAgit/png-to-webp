@@ -1,5 +1,7 @@
 # PNG → WebP (Cursor skill)
 
+Репозиторий: https://github.com/ELLECTRAgit/png-to-webp
+
 Скрипт и Cursor skill для конвертации PNG/JPG в WebP. Работает на Windows, macOS и Linux через Node.js и [sharp](https://sharp.pixelplumbing.com/) — системный `cwebp` не нужен.
 
 ## Что умеет
@@ -23,7 +25,7 @@
 **macOS / Linux:**
 
 ```bash
-git clone <URL-репозитория> ~/.cursor/skills/png-to-webp
+git clone https://github.com/ELLECTRAgit/png-to-webp.git ~/.cursor/skills/png-to-webp
 cd ~/.cursor/skills/png-to-webp
 chmod +x install.sh
 ./install.sh
@@ -32,7 +34,7 @@ chmod +x install.sh
 **Windows (PowerShell):**
 
 ```powershell
-git clone <URL-репозитория> $env:USERPROFILE\.cursor\skills\png-to-webp
+git clone https://github.com/ELLECTRAgit/png-to-webp.git $env:USERPROFILE\.cursor\skills\png-to-webp
 cd $env:USERPROFILE\.cursor\skills\png-to-webp
 .\install.ps1
 ```
