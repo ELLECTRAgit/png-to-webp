@@ -296,6 +296,25 @@ function toPosix(p) {
   return p.split(path.sep).join('/')
 }
 
+function addPathVariants(relPath, relPathOut, add) {
+  if (!relPath || relPath.startsWith('..')) return
+
+  add(relPath, relPathOut)
+  add(relPath.replace(/\//g, '\\'), relPathOut.replace(/\//g, '\\'))
+  add(`/${relPath}`, `/${relPathOut}`)
+  add(`./${relPath}`, `./${relPathOut}`)
+
+  const publicMatch = relPath.match(/^public\/(.+)$/i)
+  if (!publicMatch) return
+
+  const urlPath = publicMatch[1]
+  const urlPathOut = relPathOut.replace(/^public\//i, '')
+  add(`/${urlPath}`, `/${urlPathOut}`)
+  add(urlPath, urlPathOut)
+  add(`./${urlPath}`, `./${urlPathOut}`)
+  add(urlPath.replace(/\//g, '\\'), urlPathOut.replace(/\//g, '\\'))
+}
+
 function buildReplacementPatterns(inputPath, outPath, replaceRoot, cwd, alsoBasename) {
   const patterns = []
   const seen = new Set()
@@ -308,18 +327,12 @@ function buildReplacementPatterns(inputPath, outPath, replaceRoot, cwd, alsoBase
 
   const relCwd = toPosix(path.relative(cwd, inputPath))
   const relCwdOut = toPosix(path.relative(cwd, outPath))
-  add(relCwd, relCwdOut)
-  add(relCwd.replace(/\//g, '\\'), relCwdOut.replace(/\//g, '\\'))
+  addPathVariants(relCwd, relCwdOut, add)
 
   if (replaceRoot) {
     const relRoot = toPosix(path.relative(replaceRoot, inputPath))
     const relRootOut = toPosix(path.relative(replaceRoot, outPath))
-    if (!relRoot.startsWith('..')) {
-      add(relRoot, relRootOut)
-      add(`/${relRoot}`, `/${relRootOut}`)
-      add(`./${relRoot}`, `./${relRootOut}`)
-      add(relRoot.replace(/\//g, '\\'), relRootOut.replace(/\//g, '\\'))
-    }
+    addPathVariants(relRoot, relRootOut, add)
   }
 
   const fromExt = path.extname(inputPath)
